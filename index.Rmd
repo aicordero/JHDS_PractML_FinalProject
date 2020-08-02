@@ -1,6 +1,4 @@
 ---
-title: "finalProject"
-author: "Jorge Cordero"
 date: "7/31/2020"
 output: html_document
 ---
@@ -11,3 +9,212 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Final Project for Practical Machine Learning. Johns Hopkins University
 
+### Executive Summary
+This report presents a solution to the final project for the practical machine learning course. We used data from the Human Activity recognition project in order to predict different classes of barbell lifts. We used three promising machine learning algorithms: random forest, gradient boosting and CART. After some experimentation we found that random forest can effectively predict the correct classes of exercises with a 99.89% accuracy. We present relevant charts and methodology to assert our results.
+
+The github repository for this project can be found here [https://github.com/jpcohz/JHDS_PractML_FinalProject](https://github.com/jpcohz/JHDS_PractML_FinalProject).
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website **[here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har)** (see the section on the Weight Lifting Exercise Dataset).
+
+The Data was produced by the Human Activity Recognition project (HAR) [[1]](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har), in order to produce contect-aware systems for elderly monitoring, life log systems for monitoring energy expenditure and for supporting weight-loss programs, and digital assistants for weight lifting exercises. For the effects of this analysis we used the training and test Data firstly published in [[2]](http://web.archive.org/web/20161224072740/http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf). In this experiment, six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+## Data Preparation
+
+We obtain the training and test Data and perform a simple exploration:
+
+```{r getdata}
+trainingFileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testFileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if(!file.exists("data") | !file.exists("data/pml-training.csv") | !file.exists("data/pml-testing.csv")){
+	dir.create("data")
+  download.file(trainingFileUrl, destfile = "./data/pml-training.csv", method = "curl")
+  download.file(testFileUrl, destfile = "./data/pml-testing.csv", method = "curl")
+}
+
+trainDataOriginal <- read.csv("./data/pml-training.csv")
+testDataOriginal <- read.csv("./data/pml-testing.csv")
+```
+
+The training Data contains **`r dim(trainDataOriginal)[1]`** observations and the test set has **`r dim(testDataOriginal)[1]`** observations. The original Data has **`r dim(trainDataOriginal)[2]`** variables (or columns); therefore, further pruning is needed in order to perform relevant computations. From exploration we remove the first seven columns because they are not relevant for our prediction task, we also remove columns containing missing values (NA) and also variables that have near zero variance.  
+
+```{r cleandata}
+# Remove the first seven columns:
+trainData <- trainDataOriginal[,8:length(colnames( trainDataOriginal ))]
+testData <-  testDataOriginal[,8:length(colnames( testDataOriginal ))] 
+
+# Remove NAs:
+trainData <- trainData[,complete.cases(t(trainData)) & complete.cases(t(testData))]
+testData <- testData[,complete.cases(t(trainData)) & complete.cases(t(testData))]
+
+# Remove predictor variables that have near zero variance and thus not useful for prediction:
+library(caret)
+nearzerovarianceVars <- nearZeroVar(trainData,saveMetrics=TRUE)
+trainData <- trainData[, nearzerovarianceVars$nzv==FALSE]
+testData <- testData[, nearzerovarianceVars$nzv==FALSE]
+
+trainData$classe <- as.factor(trainData$classe)
+testData$classe <- NA
+testData$classe <- as.factor(testData$classe)
+```
+
+After selecting our predictors (performing feature selection) we end up with the same number of observations (`r dim(trainData)[1]` in training and `r dim(testData)[1]` in test Data) but now we have considerably reduced the number of columns to `r dim(trainData)[2]`. The list of the final variables to be used as predictors are:
+
+```{r listOfFeatures}
+names(trainData)[1:length(trainData)-1]
+```
+
+Remember that the last column represents the variable **classe** which will be used as our outcome or class label variable.
+
+### Crossvalidation Structure
+
+In order to validate our future predictions we divided the initial Data into training and validation sets. After some experimentation we concluded that a partition of 75% for training and 25% for validation resulted in better outcomes for the model construction.
+
+```{r crossvalidation}
+trainingSamplesIndex <- createDataPartition(trainData$classe, p=0.75, list=F)
+trainData2 <- trainData[trainingSamplesIndex, ]
+validationData <- trainData[-trainingSamplesIndex, ]
+totalFolds = 10
+```
+
+The final number of samples (**`r dim(trainData)[1]`** initially) used for training were **`r dim(trainData2)[1]`** and **`r dim(validationData)[1]`** for validation. We choose to perform a 10 fold cross validation given that the amount of Data seems to be more than enough for our purposes (however, an extensive analysis of sufficient statistics for the number of samples can be conducted but it is out of the scope of this project).
+
+## Model Construction
+
+For the effects of this excercise we decided to explore the feasibility of tree different machine learning algorithms, namely ranfom forest, stochastic gradient boosting tree and CART decission tree. 
+
+- Random Forest (rf) [3]  is an ensemble learning method for classification, regression and other tasks that operate by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. They correct the overfitting problem to their training set. Moreover, this technique has been said to be robust enough to handle outliers and highly correlated covariates, its main goal is the reduction of variance. Its weak point may be intrepretability and bias.
+
+- Stochastic Gradient Boosting Tree (gbm) [4] is a technique  which produces a prediction model in the form of an ensemble of weak prediction models, typically decision trees. It builds the model in a stage-wise fashion like other boosting methods do, and it generalizes them by allowing optimization of an arbitrary differentiable loss function. 
+
+- CART (rpart)[5] is a decision tree that can classify continuous or discrete outcomes. Classification tree analysis is when the predicted outcome is the class (discrete) to which the data belongs. Regression tree analysis is when the predicted outcome can be considered a real number.
+
+```{r modelfit, cache=TRUE}
+library(rpart)
+library(gbm)
+cvParams <- trainControl(method='cv', number = totalFolds)
+
+model1RF <- train(classe ~ ., data=trainData2, 
+                  method="rf",
+                  trControl=cvParams, 
+                  ntree=128)
+
+save(model1RF, file='./model1_RF.RData')
+model1RF
+
+model1GBM <- train(classe ~ .,  data=trainData2,
+                   method='gbm', verbose = FALSE,
+                   trControl=cvParams)
+
+save(model1GBM, file='./model1_GBM.RData')
+model1GBM
+
+model1CART <- train(classe ~ ., data=trainData2,
+                    method='rpart',
+                    trControl=cvParams)
+
+save(model1CART, file='./model1_CART.RData')
+model1CART
+```
+
+The next table shows how random forest outperforms in accuracy on the training set gradient boosting and CART:
+ 
+- Random forest  **99.25%**.
+- Gradient Boosting **96.07%**.
+- CART **51.57%**.
+
+In order to confirm the efficacy of each method we used each method to predict over the same train data just for visualization purposes:
+
+```{r validationtraining}
+predTrainingRF <- predict(model1RF, trainData2)
+cmTRF <- confusionMatrix(predTrainingRF, trainData2$classe) 
+print(cmTRF)
+
+predTrainingGBM <- predict(model1GBM, trainData2)
+cmTGBM <- confusionMatrix(predTrainingGBM, trainData2$classe) 
+print(cmTGBM)
+
+predTrainingCART <- predict(model1CART, trainData2)
+cmTCART <- confusionMatrix(predTrainingCART, trainData2$classe)
+print(cmTCART)
+
+AccuracyTraining <- data.frame( Model = c('RF', 'GBM', 'CART'),
+                             Accuracy = rbind(cmTRF$overall[1], cmTGBM$overall[1], cmTCART$overall[1]))
+print(AccuracyTraining)
+```
+
+### Model Validation and Out of Sample Error
+
+In this section we predict the classes over the validation Data for each of our models. We finish by comparing the predicted classes against the true original cases in the held out set. In this way we can calculate the overall accuracy and out of sample error.
+
+```{r validation}
+predValidationRF <- predict(model1RF, validationData)
+cmVRF <- confusionMatrix(predValidationRF, validationData$classe) 
+
+predValidationGBM <- predict(model1GBM, validationData)
+cmVGBM <- confusionMatrix(predValidationGBM, validationData$classe) 
+
+predValidationCART <- predict(model1CART, validationData)
+cmVCART <- confusionMatrix(predValidationCART, validationData$classe)
+
+AccuracyValidation <- data.frame( Model = c('RF', 'GBM', 'CART'),
+                             Accuracy = rbind(cmVRF$overall[1], cmVGBM$overall[1], cmVCART$overall[1]))
+oseValidation <- data.frame( Model = c('RF', 'GBM', 'CART'),
+                             ose = rbind(1 - as.numeric(cmVRF$overall[1]), 
+                             1 - as.numeric(cmVGBM$overall[1]), 1 - as.numeric(cmVCART$overall[1])))
+```
+
+
+The accuracies for each model are:
+
+```{r accvalidation}
+print(AccuracyValidation)
+```
+
+The out of sample errors are:
+```{r outofsampleerror}
+print(oseValidation)
+```
+
+The confusion matrix for the best model (in this case Random Forest had the lowest out of sample error) is:
+
+```{r rfCM}
+cmVRF
+```
+
+Random Forest is clearly the most accurate model, further parameter tunning can be investigated. As a first step we present the top ten variables (features) for prediction and a feature plot showing their interactions. 
+
+```{r rfTOPVariables, cache=TRUE}
+plot(varImp(model1RF), main = "Top 10 Variables", top = 10)
+varImp(model1RF)
+pairs(trainData[,c("roll_belt","pitch_forearm","yaw_belt","roll_forearm","pitch_belt")], pch = 19)
+```
+
+## Predictions on Test Set
+
+Given that in the best case scenario (predicting against the same Data used for training) and in the validation case Random Forest outperformed other models we will use it to predict classes with the test Data.
+
+```{r testpredictions}
+predTestRF <- predict(model1RF, newdata = testData)
+Results <- data.frame(  Problem.id=testData$problem_id, Prediction=predTestRF )
+print(Results)
+```
+
+### Final Discussion
+
+Much work is needed in order to present a tunned model for random forest. We could also try to include variables with missing Data and perform some refilling technique such as maximum likelihood estimation in order to include other variables that might be relevant. 
+
+## References
+
+[1] Human Activity Recognition Project. [http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har). Visited on July 31st 2020.
+
+[2] [Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.](http://web.archive.org/web/20161224072740/http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) 
+
+[3] Random Forest. [https://en.wikipedia.org/wiki/Random_forest](https://en.wikipedia.org/wiki/Random_forest). Visited on August the 1st, 2020.
+
+[4] Stochastic Gradient Boosting Tree. [https://en.wikipedia.org/wiki/Gradient_boosting](https://en.wikipedia.org/wiki/Gradient_boosting). Visited on August the 1st, 2020.
+
+[5] CART. [https://en.wikipedia.org/wiki/Decision_tree_learning](https://en.wikipedia.org/wiki/Decision_tree_learning). Visited on August the 1st, 2020.
