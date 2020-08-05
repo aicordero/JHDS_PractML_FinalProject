@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # Final Project for Practical Machine Learning. Johns Hopkins University
 
 ### Executive Summary
-This report presents a solution to the final project for the practical machine learning course. We used data from the Human Activity recognition project in order to predict different classes of barbell lifts. We used three promising machine learning algorithms: random forest, gradient boosting and CART. After some experimentation we found that random forest can effectively predict the correct classes of exercises with a 99.89% accuracy. We present relevant charts and methodology to assert our results.
+This report presents a solution for the final project for the practical machine learning course. We used data from the Human Activity recognition project in order to predict different classes of barbell lifts. We used three promising machine learning algorithms: random forest, gradient boosting and CART. After some experimentation we found that random forest can effectively predict the correct classes of exercises with a 99.89% accuracy. We present relevant charts and methodology to assert our results.
 
 The github repository for this project can be found here [https://github.com/jpcohz/JHDS_PractML_FinalProject](https://github.com/jpcohz/JHDS_PractML_FinalProject).
 
